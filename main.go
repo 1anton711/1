@@ -5,44 +5,55 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
 func main() {
-	numAccounts := 10                       // set the number of accounts to generate
-	file, err := os.Create("addresses.txt") // create the output file
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-
-	for i := 0; i < numAccounts; i++ {
+	var i int
+	for {
 		privateKey, err := crypto.GenerateKey()
 		if err != nil {
 			log.Fatal(err)
 		}
-
-		privateKeyBytes := crypto.FromECDSA(privateKey)
-		fmt.Println("Private Key:", hexutil.Encode(privateKeyBytes))
-
 		publicKey := privateKey.Public()
 		publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
 		if !ok {
 			log.Fatal("cannot assert type: publicKey is not of type *ecdsa.PublicKey")
 		}
-
-		publicKeyBytes := crypto.FromECDSAPub(publicKeyECDSA)
-		fmt.Println("Public Key:", hexutil.Encode(publicKeyBytes))
-
 		address := crypto.PubkeyToAddress(*publicKeyECDSA).Hex()
-		fmt.Println("Address:", address)
+		if strings.HasPrefix(address, "0x") {
+			count := 0
+			for _, c := range address[2:] {
+				if c == rune(address[2]) && c == rune(address[3]) && c == rune(address[4]) {
 
-		// write the address to the output file
-		_, err = file.WriteString(address + "\n")
-		if err != nil {
-			log.Fatal(err)
+					count++
+					if count == 1 {
+						file, err := os.OpenFile("adresses.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+						if err != nil {
+							log.Fatal(err)
+						}
+						defer file.Close()
+						privateBytes := crypto.FromECDSA(privateKey)
+						publicBytes := crypto.FromECDSAPub(publicKeyECDSA)
+						line := fmt.Sprintf("Address: %s\nPrivate key: %s\nPublic key: %s\n\n", address, hexutil.Encode(privateBytes), hexutil.Encode(publicBytes))
+						if _, err := file.WriteString(line); err != nil {
+							log.Fatal(err)
+						}
+						fmt.Println("Address found:", address)
+						i++
+						if i == 10 {
+							return
+						}
+					}
+				} else {
+					count = 0
+				}
+			}
 		}
+		time.Sleep(1 * time.Millisecond)
 	}
 }

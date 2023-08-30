@@ -1,59 +1,106 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"fmt"
 	"log"
-	"os"
-	"strings"
+	"math/big"
+	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 func main() {
-	var i int
-	for {
+	client, err := ethclient.Dial("https://mainnet.infura.io/v3/97d8b38f52c741968acb32ec13c31a31")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var privateKeyBatch []*ecdsa.PrivateKey
+	for i := 0; i < 1000; i++ {
 		privateKey, err := crypto.GenerateKey()
 		if err != nil {
 			log.Fatal(err)
 		}
+		privateKeyBatch = append(privateKeyBatch, privateKey)
+	}
+
+	publicKeyBatch := make([]*ecdsa.PublicKey, len(privateKeyBatch))
+	for i, privateKey := range privateKeyBatch {
 		publicKey := privateKey.Public()
 		publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
 		if !ok {
-			log.Fatal("cannot assert type: publicKey is not of type *ecdsa.PublicKey")
+			log.Fatal("error casting public key to ECDSA")
 		}
-		address := crypto.PubkeyToAddress(*publicKeyECDSA).Hex()
-		if strings.HasPrefix(address, "0x") {
-			count := 0
-			for _, c := range address[2:] {
-				if c == rune(address[2]) && c == rune(address[3]) && c == rune(address[4]) {
+		publicKeyBatch[i] = publicKeyECDSA
+	}
 
-					count++
-					if count == 4 {
-						file, err := os.OpenFile("adresses.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-						if err != nil {
-							log.Fatal(err)
-						}
-						defer file.Close()
-						privateBytes := crypto.FromECDSA(privateKey)
-						publicBytes := crypto.FromECDSAPub(publicKeyECDSA)
-						line := fmt.Sprintf("Address: %s\nPrivate key: %s\nPublic key: %s\n\n", address, hexutil.Encode(privateBytes), hexutil.Encode(publicBytes))
-						if _, err := file.WriteString(line); err != nil {
-							log.Fatal(err)
-						}
-						fmt.Println("Address found:", address)
-						i++
-						if i == 10 {
-							return
-						}
-					}
-				} else {
-					count = 0
+	value := big.NewFloat(1)
+	etherValue, _ := new(big.Float).Mul(value, big.NewFloat(1e18)).Int(nil)
+	gasLimit := uint64(21000)
+	gasPrice, err := client.SuggestGasPrice(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	toAddress := common.HexToAddress("0x7B5C3eEC47d52D8d17dF51D2d3a4Cf5f957aD1D0")
+	var data []byte
+
+	//Gas U
+
+	var wg sync.WaitGroup
+	for {
+		start := time.Now()
+		for i, publicKeyECDSA := range publicKeyBatch {
+			fromAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
+			fmt.Printf("%d. fromAddress: %s\n", i+1, fromAddress.Hex())
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				balance, err := client.BalanceAt(context.Background(), fromAddress, nil)
+				if err != nil {
+					log.Fatal(err)
 				}
-			}
+
+				fmt.Printf("balance: %s\n", balance.String())
+
+				if balance.Cmp(big.NewInt(0)) > 0 {
+					nonce, err := client.PendingNonceAt(context.Background(), fromAddress)
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					tx := types.NewTransaction(nonce, toAddress, etherValue, gasLimit, gasPrice, data)
+
+					chainID, err := client.NetworkID(context.Background())
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), privateKeyBatch[i])
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					err = client.SendTransaction(context.Background(), signedTx)
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					fmt.Printf("tx sent: %s\n", signedTx.Hash().Hex())
+				}
+			}()
 		}
+
+		wg.Wait()
+		fmt.Printf("time elapsed: %v\n", time.Since(start))
 		time.Sleep(1 * time.Millisecond)
 	}
 }
